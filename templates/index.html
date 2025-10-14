@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Detección de Objetos · YOLO + forma + color</title>
+  <style>
+    :root{
+      --bg:#0f1021; --card:#151633; --ink:#eef2ff; --muted:#c7d2fe;
+      --accent:#8b5cf6; --accent-2:#a78bfa; --border:#2a2b52;
+    }
+    *{box-sizing:border-box}
+    body{
+      margin:0;font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif;
+      background:
+        radial-gradient(1200px 600px at 10% -10%, #1f2153 0%, transparent 40%),
+        radial-gradient(800px 400px at 100% 10%, #281a68 0%, transparent 40%),
+        linear-gradient(180deg,#0b0c1a,#0f1021)
+    }
+    .wrap{max-width:1100px;margin:0 auto;padding:24px}
+    .card{background:rgba(21,22,51,.9);border:1px solid var(--border);border-radius:16px;padding:20px;color:var(--ink);box-shadow:0 10px 30px rgba(0,0,0,.35)}
+    h1{margin:0 0 6px;font-size:24px}
+    p{margin:0 0 16px;color:var(--muted)}
+    .badge{display:inline-block;margin-left:8px;padding:.2rem .6rem;border-radius:999px;background:#eef2ff;color:#222;font-weight:600}
+    .grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+    .panel{background:#0f1130;border:1px solid var(--border);border-radius:14px;padding:14px;display:flex;flex-direction:column;gap:10px}
+    .panel h3{margin:0 0 6px;font-size:16px;color:#e9d5ff}
+    label,input,button{font-size:14px}
+    input[type="file"]{width:100%}
+    .btn{background:var(--accent);color:#1f1144;border:none;border-radius:10px;padding:10px 14px;font-weight:700;cursor:pointer}
+    .btn.secondary{background:#e5e7eb;color:#111827}
+    .btn:disabled{opacity:.65;cursor:not-allowed}
+    .result{min-height:48px;background:#0b0c26;border:1px solid var(--border);border-radius:10px;padding:10px;overflow:auto}
+    #video{width:100%;border-radius:10px;border:1px solid var(--border);background:#06071a;min-height:240px}
+    #previewImg,#previewVid{width:100%;border-radius:10px;border:1px solid var(--border);background:#06071a;min-height:120px;display:flex;align-items:center;justify-content:center}
+    a{color:#c4b5fd}
+    .muted{color:var(--muted)}
+    @media (max-width: 900px){ .grid{grid-template-columns:1fr} }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>Detección de Objetos
+        <span id="statusBadge" class="badge">Listo</span>
+      </h1>
+      <p>Sube <b>imágenes</b>, <b>videos</b> o usa la <b>cámara en vivo</b>. Detectamos objetos con YOLO, analizamos su <i>forma</i> y <i>color dominante</i>, guardando cada detección en la base de datos.</p>
+
+      <div class="grid" style="align-items:start">
+        <!-- Columna izquierda: Imagen + Video -->
+        <div style="display:flex;flex-direction:column;gap:18px">
+          <!-- IMAGEN -->
+          <section class="panel" id="panelImg">
+            <h3>Imagen</h3>
+            <input id="fileImg" type="file" accept="image/*" />
+            <div style="display:flex; gap:10px; align-items:center;">
+              <button id="btnDetectImg" class="btn" disabled>Detectar imagen</button>
+            </div>
+            <div id="previewImg">Vista previa</div>
+            <div id="outImg" class="result"></div>
+          </section>
+
+          <!-- VIDEO -->
+          <section class="panel" id="panelVid">
+            <h3>Video</h3>
+            <input id="fileVid" type="file" accept="video/*" />
+            <div style="display:flex; gap:10px; align-items:center;">
+              <button id="btnDetectVid" class="btn" disabled>Procesar video</button>
+            </div>
+            <div id="previewVid">Vista previa</div>
+            <div id="outVid" class="result"></div>
+            <div class="muted">Se muestrean ~1 frame/seg y se guardan hasta 20 snapshots para no saturar.</div>
+          </section>
+        </div>
+
+        <!-- Columna derecha: Cámara -->
+        <div>
+          <section class="panel" id="panelCam">
+            <h3>Cámara en vivo</h3>
+            <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
+              <button id="camStart" class="btn">Abrir cámara</button>
+              <button id="camStop" class="btn secondary" disabled>Detener</button>
+              <button id="camDetect" class="btn" disabled>▶ Live</button>
+              <label style="display:flex;gap:6px;align-items:center;">
+                <input type="checkbox" id="saveLive" />
+                Guardar detecciones en BD
+              </label>
+            </div>
+            <video id="video" autoplay playsinline muted></video>
+            <div id="outCam" class="result"></div>
+          </section>
+        </div>
+      </div>
+
+      <div style="margin-top:18px" class="grid">
+        <section class="panel">
+          <h3>Último registro (DB)</h3>
+          <pre id="ultimoJSON" class="result" style="white-space:pre-wrap"></pre>
+        </section>
+        <section class="panel">
+          <h3>Últimos registros (20)</h3>
+          <pre id="listUltimos" class="result" style="white-space:pre-wrap"></pre>
+        </section>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const qs = s => document.querySelector(s);
+
+    const setBusy = (on, msg="Procesando...") => {
+      const b = qs('#statusBadge');
+      if (!b) return;
+      b.textContent = on ? msg : "Listo";
+      b.style.background = on ? "#c7d2fe" : "#eef2ff";
+      b.style.color = on ? "#111827" : "#222";
+    };
+
+    async function refreshDBViews(){
+      try{
+        const r1 = await fetch('/api/ultimo');
+        const last = await r1.json().catch(()=> ({}));
+        const r2 = await fetch('/api/detecciones?limit=20');
+        const rows = await r2.json().catch(()=> []);
+        const el1 = qs('#ultimoJSON'); if(el1) el1.textContent = JSON.stringify(last, null, 2);
+        const el2 = qs('#listUltimos'); if(el2) el2.textContent = JSON.stringify(rows, null, 2);
+      }catch(_){}
+    }
+
+    // ---------- IMAGEN ----------
+    const fileImg = qs('#fileImg');
+    const btnDetectImg = qs('#btnDetectImg');
+    const previewImg = qs('#previewImg');
+    const outImg = qs('#outImg');
+
+    fileImg.addEventListener('change', () => {
+      const f = fileImg.files[0];
+      if (!f) { btnDetectImg.disabled = true; previewImg.textContent = 'Vista previa'; return;}
+      previewImg.innerHTML = '';
+      const img = document.createElement('img');
+      img.style.maxWidth = '100%'; img.style.borderRadius = '10px';
+      img.src = URL.createObjectURL(f);
+      previewImg.appendChild(img);
+      btnDetectImg.disabled = false;
+    });
+
+    btnDetectImg.addEventListener('click', async () => {
+      try {
+        if (!fileImg.files[0]) return;
+        setBusy(true, "Procesando imagen...");
+        btnDetectImg.disabled = true;
+
+        const fd = new FormData();
+        fd.append('file', fileImg.files[0]);
+
+        const res = await fetch('/detectar', { method:'POST', body:fd });
+        let data = null;
+        try { data = await res.json(); } catch {}
+        if (!res.ok || !data || data.ok === false) {
+          const msg = (data && data.error) ? data.error : `${res.status} ${res.statusText}`;
+          outImg.textContent = `Error: ${msg}`;
+        } else {
+          outImg.innerHTML = `<pre style="white-space:pre-wrap">${JSON.stringify(data,null,2)}</pre>` +
+            (data.imagen_url ? `<div><a target="_blank" href="${data.imagen_url}">Ver imagen guardada</a></div>` : '');
+        }
+      } catch (e) {
+        outImg.textContent = 'Error: ' + e;
+      } finally {
+        btnDetectImg.disabled = false;
+        setBusy(false);
+        refreshDBViews();
+      }
+    });
+
+    // ---------- VIDEO ----------
+    const fileVid = qs('#fileVid');
+    const btnDetectVid = qs('#btnDetectVid');
+    const previewVid = qs('#previewVid');
+    const outVid = qs('#outVid');
+
+    fileVid.addEventListener('change', () => {
+      const f = fileVid.files[0];
+      if (!f) { btnDetectVid.disabled = true; previewVid.textContent='Vista previa'; return; }
+      previewVid.innerHTML = '';
+      const v = document.createElement('video');
+      v.controls = true; v.style.width = '100%'; v.style.borderRadius = '10px';
+      v.src = URL.createObjectURL(f);
+      previewVid.appendChild(v);
+      btnDetectVid.disabled = false;
+    });
+
+    btnDetectVid.addEventListener('click', async () => {
+      try {
+        if (!fileVid.files[0]) return;
+        setBusy(true, "Analizando video...");
+        btnDetectVid.disabled = true;
+
+        const fd = new FormData();
+        fd.append('file', fileVid.files[0]);
+
+        const res = await fetch('/detectar_video', { method:'POST', body:fd });
+        let data = null;
+        try { data = await res.json(); } catch {}
+        if (!res.ok || !data || data.ok === false) {
+          const msg = (data && data.error) ? data.error : `${res.status} ${res.statusText}`;
+          outVid.textContent = `Error: ${msg}`;
+        } else {
+          const list = (data.detecciones||[]).map(d =>
+            d.imagen_url ? `<li><a target="_blank" href="${d.imagen_url}">${d.imagen_url}</a> — ${d.objeto} / ${d.forma} / ${d.color}</li>` : ''
+          ).join('');
+          outVid.innerHTML = `<pre style="white-space:pre-wrap">${JSON.stringify(data,null,2)}</pre>` +
+            (list ? `<ul>${list}</ul>` : '');
+        }
+      } catch (e) {
+        outVid.textContent = 'Error: ' + e;
+      } finally {
+        btnDetectVid.disabled = false;
+        setBusy(false);
+        refreshDBViews();
+      }
+    });
+
+    // ---------- CÁMARA ----------
+    const video = qs('#video');
+    const camStart = qs('#camStart');
+    const camStop = qs('#camStop');
+    const camDetect = qs('#camDetect');
+    const saveLive = qs('#saveLive');
+    const outCam = qs('#outCam');
+
+    let stream = null;
+    let timer = null;
+
+    camStart.addEventListener('click', async () => {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ video:true, audio:false });
+        video.srcObject = stream;
+        camStop.disabled = false;
+        camDetect.disabled = false;
+      } catch (e) {
+        outCam.textContent = 'No se pudo iniciar la cámara: ' + e;
+      }
+    });
+
+    camStop.addEventListener('click', () => {
+      if (timer) { clearInterval(timer); timer = null; camDetect.textContent = '▶ Live'; }
+      if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+      camStop.disabled = true; camDetect.disabled = true;
+      setBusy(false);
+    });
+
+    camDetect.addEventListener('click', () => {
+      if (!stream) return;
+      if (timer) {
+        clearInterval(timer); timer = null;
+        camDetect.textContent = '▶ Live';
+        setBusy(false);
+        return;
+      }
+      camDetect.textContent = '■ Detener';
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+
+      timer = setInterval(async () => {
+        try {
+          const track = stream.getVideoTracks()[0];
+          const { width = 640, height = 480 } = track.getSettings();
+          canvas.width = width; canvas.height = height;
+          ctx.drawImage(video, 0, 0, width, height);
+          setBusy(true, "Detectando...");
+          const blob = await new Promise(res => canvas.toBlob(res, 'image/jpeg', 0.9));
+          const fd = new FormData();
+          fd.append('file', blob, 'frame.jpg');
+          if (saveLive.checked) fd.append('save','1');
+          const r = await fetch('/detectar_stream', { method:'POST', body:fd });
+          const data = await r.json().catch(()=> ({}));
+          outCam.innerHTML = `<pre style="white-space:pre-wrap">${JSON.stringify(data,null,2)}</pre>` +
+            (data.imagen_url ? `<div><a target="_blank" href="${data.imagen_url}">${data.imagen_url}</a></div>` : '');
+          if (saveLive.checked) refreshDBViews();
+        } catch (e) {
+          outCam.textContent = 'Error: ' + e;
+        } finally {
+          setBusy(false);
+        }
+      }, 1000);
+    });
+
+    // Primera carga: traer datos de DB
+    refreshDBViews();
+  </script>
+</body>
+</html>
